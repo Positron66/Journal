@@ -1,37 +1,17 @@
 ﻿document.addEventListener('DOMContentLoaded', function () {
 	const turnButtons = document.querySelectorAll('.turn');
 
-	// No automatic speech: user requested speech disabled.
-	// Buttons navigate when they have a `data-target` attribute.
-	turnButtons.forEach(btn => {
-		btn.addEventListener('click', function () {
-			const target = btn.getAttribute('data-target');
-			if (target) {
-				window.location.href = target;
-				return;
-			}
-
-			// Fallback: if no target, try history back for "back" buttons
-			if (btn.classList.contains('back')) {
-				if (window.history.length > 1) window.history.back();
-			}
-		});
-	});
-
 	// Audio toggle on standalone pages
 	const audio = document.getElementById('bg-audio');
 	const audioToggle = document.querySelector('.audio-toggle');
 	if (audio && audioToggle) {
-		// ensure preload is none; user must opt-in
 		audioToggle.addEventListener('click', function () {
 			if (audio.paused) {
-				// start
 				audio.play().then(() => {
 					audioToggle.classList.add('playing');
 					audioToggle.setAttribute('aria-pressed', 'true');
 					audioToggle.setAttribute('aria-label', 'Pause audio');
 				}).catch(() => {
-					// play rejected (autoplay policy). still toggle UI so user can try again
 					audioToggle.classList.add('playing');
 					audioToggle.setAttribute('aria-pressed', 'true');
 					audioToggle.setAttribute('aria-label', 'Pause audio');
@@ -44,7 +24,6 @@
 			}
 		});
 
-		// Sync button when audio ends
 		audio.addEventListener('ended', function () {
 			audioToggle.classList.remove('playing');
 			audioToggle.setAttribute('aria-pressed', 'false');
@@ -60,6 +39,42 @@
 	const pageTurnSoundBase = new Audio('Assests/Sound/pageturn.mp3');
 	pageTurnSoundBase.preload = 'auto';
 
+	function playPageTurnSound() {
+		const clickSound = pageTurnSoundBase.cloneNode(true);
+		clickSound.currentTime = 0;
+		clickSound.play().catch(function () {
+			// Ignore blocked playback errors.
+		});
+	}
+
+	function navigateWithPageTurn(target, delayMs) {
+		if (!target) return;
+		playPageTurnSound();
+		setTimeout(function () {
+			window.location.href = target;
+		}, typeof delayMs === 'number' ? delayMs : 120);
+	}
+
+	window.playPageTurnSound = playPageTurnSound;
+	window.navigateWithPageTurn = navigateWithPageTurn;
+
+	turnButtons.forEach(function (btn) {
+		btn.addEventListener('click', function () {
+			const target = btn.getAttribute('data-target');
+			if (target) {
+				navigateWithPageTurn(target, 120);
+				return;
+			}
+
+			if (btn.classList.contains('back') && window.history.length > 1) {
+				playPageTurnSound();
+				setTimeout(function () {
+					window.history.back();
+				}, 120);
+			}
+		});
+	});
+
 	function triggerScreenShake() {
 		document.body.classList.remove('screen-shake');
 		void document.body.offsetWidth;
@@ -72,7 +87,6 @@
 	}
 
 	function playWrongSoundAndShake() {
-		// Clone the audio node so repeated clicks can overlap naturally.
 		const clickSound = wrongSoundBase.cloneNode(true);
 		clickSound.currentTime = 0;
 		clickSound.play().catch(function () {
@@ -96,28 +110,33 @@
 			return;
 		}
 		if (event.target.closest('.map-doodle-img.map-trigger')) {
+			const isPage12Map = event.target.closest('main.page[aria-label="Page 12"]');
+			if (isPage12Map) {
+				playWrongSoundAndShake();
+				return;
+			}
 			playMapClickSoundAndShake();
 		}
 	});
 
-	const pageOneJumpLinks = document.querySelectorAll('.page1-jump-box a');
-	pageOneJumpLinks.forEach(function (link) {
-		link.addEventListener('click', function (event) {
-			const href = link.getAttribute('href');
-			if (!href) return;
+	document.addEventListener('click', function (event) {
+		const link = event.target.closest('a[href]');
+		if (!link) return;
+		if (event.defaultPrevented) return;
+		if (event.button !== 0) return;
+		if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+		if (link.target && link.target.toLowerCase() === '_blank') return;
+		if (link.hasAttribute('download')) return;
 
-			event.preventDefault();
+		const href = (link.getAttribute('href') || '').trim();
+		if (!href) return;
+		if (href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
 
-			const clickSound = pageTurnSoundBase.cloneNode(true);
-			clickSound.currentTime = 0;
-			clickSound.play().catch(function () {
-				// Ignore blocked playback errors.
-			});
+		const isAbsolute = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(href);
+		if (isAbsolute) return;
 
-			setTimeout(function () {
-				window.location.href = href;
-			}, 120);
-		});
+		event.preventDefault();
+		navigateWithPageTurn(href, 120);
 	});
 
 	const page12Main = document.querySelector('main.page[aria-label="Page 12"]');
@@ -152,7 +171,7 @@
 		page12MapTrigger.addEventListener('click', function () {
 			mapClickCount += 1;
 			if (mapClickCount >= redirectAt) {
-				window.location.href = 'page89x.html';
+				navigateWithPageTurn('page89x.html', 120);
 				return;
 			}
 			updateCrackState();
@@ -173,13 +192,45 @@ function initializeChessAccessGate(onUnlock) {
 	const submit = document.getElementById('chess-access-submit');
 	const error = document.getElementById('chess-access-error');
 	const page = document.querySelector('.page.chess-entry');
-	const sessionKey = 'arg_chess_unlocked_v1';
-	const requiredCode = 'testside1';
+	const sessionKey = (gate.dataset.sessionKey || 'arg_chess_unlocked_v1').trim();
+	const requiredCode = (gate.dataset.requiredCode || 'testside1').trim();
+	const errorMessage = (gate.dataset.errorMessage || 'Wrong code. Try again.').trim();
+	const isCaseSensitive = gate.dataset.caseSensitive === 'true';
+	const corruptOnWrong = gate.dataset.corruptOnWrong === 'true';
+	const corruptClass = (gate.dataset.corruptClass || 'page31-corrupt-active').trim();
+	const corruptPulseClass = (gate.dataset.corruptPulseClass || 'page31-corrupt-pulse').trim();
+	const corruptMax = Math.max(1, parseInt(gate.dataset.corruptMax || '10', 10) || 10);
+	const corruptStep = Math.max(1, parseInt(gate.dataset.corruptStep || '2', 10) || 2);
+	const failRedirectTarget = (gate.dataset.failRedirectTarget || '').trim();
+	const failRedirectAttempts = Math.max(1, parseInt(gate.dataset.failRedirectAttempts || '5', 10) || 5);
+	let wrongAttempts = 0;
+	let corruptPulseTimer = null;
+
+	function applyWrongAttemptCorruption() {
+		wrongAttempts += 1;
+		if (!corruptOnWrong) return;
+		const corruptionLevel = Math.min(corruptMax, wrongAttempts * corruptStep);
+		document.body.classList.add(corruptClass);
+		document.body.style.setProperty('--page31-corrupt-level', String(corruptionLevel));
+
+		document.body.classList.remove(corruptPulseClass);
+		void document.body.offsetWidth;
+		document.body.classList.add(corruptPulseClass);
+
+		if (corruptPulseTimer) clearTimeout(corruptPulseTimer);
+		corruptPulseTimer = setTimeout(function () {
+			document.body.classList.remove(corruptPulseClass);
+		}, 240);
+	}
 
 	function unlockAndStart() {
 		if (page) page.classList.remove('chess-locked');
 		gate.hidden = true;
 		if (error) error.textContent = '';
+		if (corruptOnWrong) {
+			document.body.classList.remove(corruptClass, corruptPulseClass);
+			document.body.style.removeProperty('--page31-corrupt-level');
+		}
 		sessionStorage.setItem(sessionKey, 'true');
 		onUnlock();
 	}
@@ -195,11 +246,22 @@ function initializeChessAccessGate(onUnlock) {
 
 	function checkCode() {
 		const value = input ? input.value.trim() : '';
-		if (value === requiredCode) {
+		const normalizedValue = isCaseSensitive ? value : value.toLowerCase();
+		const normalizedRequired = isCaseSensitive ? requiredCode : requiredCode.toLowerCase();
+		if (normalizedValue === normalizedRequired) {
 			unlockAndStart();
 			return;
 		}
-		if (error) error.textContent = 'Wrong code. Try again.';
+		applyWrongAttemptCorruption();
+		if (failRedirectTarget && wrongAttempts >= failRedirectAttempts) {
+			if (typeof window.navigateWithPageTurn === 'function') {
+				window.navigateWithPageTurn(failRedirectTarget, 120);
+			} else {
+				window.location.href = failRedirectTarget;
+			}
+			return;
+		}
+		if (error) error.textContent = errorMessage;
 	}
 
 	if (submit) {
